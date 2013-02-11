@@ -34,8 +34,7 @@
 #include <time.h>
 
 
-// Same useful things
-// ------------------
+// Allocate safely
 
 void* malloc_or_die(size_t n)
 {
@@ -59,8 +58,7 @@ void* realloc_or_die(void* p, size_t n)
 }
 
 
-// Random number generation
-// ------------------------
+// Random number generation.
 // This is the complementary multiply with carry (CMWC) algorithm.
 
 typedef struct rng_t
@@ -81,8 +79,7 @@ void rng_init(rng_t* rng, uint32_t seed)
     rng->Q[1] = seed + phi;
     rng->Q[2] = seed + 2 * phi;
 
-    uint32_t i;
-    for (i = 3; i < 4096; ++i) {
+    for (uint32_t i = 3; i < 4096; ++i) {
         rng->Q[i] = rng->Q[i - 3] ^ rng->Q[i - 2] ^ phi ^ i;
     }
 }
@@ -105,6 +102,7 @@ uint32_t rng_get(rng_t* rng)
 }
 
 
+// Random integer in [0, k-1]
 uint32_t rng_uniform_int(rng_t* rng, uint32_t k)
 {
     uint32_t scale = UINT32_C(0xffffffff) / k;
@@ -123,91 +121,9 @@ double rng_uniform(rng_t* rng)
 }
 
 
-// Random double in [0, 1)
-double rng_uniform_pos(rng_t* rng)
-{
-    return (double) rng_get(rng) / ((double) UINT32_MAX + 1.0);
-}
-
-
-// Random gaussian.
-double rng_gaussian(rng_t* rng, double sd)
-{
-    double x, y, r2;
-    do {
-        x = -1 + 2 * rng_uniform_pos(rng);
-        y = -1 + 2 * rng_uniform_pos(rng);
-        r2 = x * x + y * y;
-    } while (r2 > 1.0 || r2 == 0.0);
-    return sd * y + sqrt(-2.0 * log(r2) / r2);
-}
-
-
-// Random gamma.
-double rng_gamma(rng_t* rng, double a, double b)
-{
-    if (a < 1) {
-        double u = rng_uniform_pos(rng);
-        return rng_gamma(rng, 1.0 + a, b) * pow(u, 1.0 / a);
-    }
-
-    double x, v, u;
-    double d = a - 1.0 / 3.0;
-    double c = (1.0 / 3.0) / sqrt(d);
-
-    do {
-        do {
-            x = rng_gaussian(rng, 1.0);
-            v = 1.0 + c * x;
-        } while (v <= 0);
-
-        v = v * v * v;
-        u = rng_uniform_pos(rng);
-    } while (u >= 1 - 0.0331 * x * x * x * x &&
-             log(u) >= 0.5 * x * x + d * (1 - v + log(v)));
-
-    return b * d * v;
-}
-
-
-// Random beta.
-double rng_beta(rng_t* rng, double a, double b)
-{
-    double u = rng_gamma(rng, a, 1.0);
-    double v = rng_gamma(rng, b, 1.0);
-    return u / (u + v);
-}
-
-
-// Random binomial.
-uint32_t rng_binomial(rng_t* rng, double p, uint32_t n)
-{
-    uint32_t i, a, b, k = 0;
-    while (n > 10) {
-        a = 1 + (n / 2);
-        b = 1 + n - a;
-
-        double x = rng_beta(rng, (double) a, (double) b);
-        if (x >= p) {
-            n = a - 1;
-            p /= x;
-        }
-        else {
-            k += a;
-            n = b -1;
-            p = (p - x) / (1 - x);
-        }
-    }
-
-    for (i = 0; i < n; ++i) {
-        double u = rng_uniform(rng);
-        if (u < p) ++k;
-    }
-
-    return k;
-}
-
-
+// Random numbers from a hypergeometric distribution.
+// n1 + n2 is the toal population, n1 the "tagged" population, and t the number
+// of samples drawn without replacement.
 uint32_t rng_hypergeometric(rng_t* rng, uint32_t n1, uint32_t n2, uint32_t t)
 {
     const uint32_t n = n1 + n2;
@@ -257,7 +173,6 @@ void shuffle(rng_t* rng, uint32_t* ks, uint32_t n)
 
 
 // Simple bit vectors
-// ------------------
 
 typedef struct bitset_t
 {
@@ -444,6 +359,8 @@ int main(int argc, char* argv[])
         }
     }
 
+    if (!isnan(p)) n = (uint64_t) (p * (double) m);
+
     if (n > m) {
         fprintf(stderr,
                "Error: cannot sample %lu lines from %lu without replacement\n",
@@ -485,8 +402,4 @@ int main(int argc, char* argv[])
         fclose(files[i]);
     }
 }
-
-
-
-
 
