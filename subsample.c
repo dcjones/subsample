@@ -1,4 +1,5 @@
 /*
+ *
    The MIT License
 
    Copyright (c) 2013 Daniel C. Jones <dcjones@cs.washington.edu>
@@ -255,19 +256,38 @@ static void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_
 }
 
 
+// Find the start of the next chunk, starting at data.
 static const char* next_chunk(const char* data, const char* end, char delim,
                               size_t chunksize, size_t minstep)
 {
     const char* c = data;
     while (chunksize--) {
-        c = memchr(c, delim, end - c);
+        c = memchr(c + minstep, delim, end - c);
         if (c == NULL || c + minstep >= end) return NULL;
-        c += minstep;
     }
-    return c;
+    return c + 1;
 }
 
 
+// Find the start of the next chunk. Also, keep track of the minimum step
+// between delimeters.
+static const char* next_chunk_pass(const char* data, const char* end, char delim,
+                                   size_t chunksize, size_t* minstep)
+{
+    const char* c = data;
+    while (chunksize--) {
+        c = memchr(data, delim, end - c);
+        if (c == NULL || c + 1 >= end) return NULL;
+        if ((size_t) (c - data) < *minstep) {
+            *minstep = c - data;
+        }
+        data = c + 1;
+    }
+    return c + 1;
+}
+
+
+// Count chunks in an array and keep track of the minimum step between delimiters.
 static uint64_t count_chunks(const char* data, const char* end, char delim,
                              size_t chunksize, size_t* minstep)
 {
@@ -276,13 +296,12 @@ static uint64_t count_chunks(const char* data, const char* end, char delim,
 
     uint64_t count = 1;
     const char* next;
-    while ((next = next_chunk(data, end, delim, chunksize, 1))) {
+    while ((next = next_chunk_pass(data, end, delim, chunksize, minstep))) {
         if ((size_t) (next - data) < *minstep) *minstep = next - data;
         data = next;
         ++count;
     }
 
-    if ((size_t) (end - data) < *minstep) *minstep = end - data;
     return count;
 }
 
@@ -302,14 +321,16 @@ int main(int argc, char* argv[])
     double p = NAN;
 
     static struct option long_options[] = {
-        {"seed", required_argument, NULL, 's'},
-        {"help", no_argument,       NULL, 'h'},
+        {"seed",      optional_argument, NULL, 's'},
+        {"delimiter", required_argument, NULL, 'd'},
+        {"chunksize", required_argument, NULL, 'k'},
+        {"help",      no_argument,       NULL, 'h'},
         {0, 0, 0, 0}
     };
 
     while (true) {
         int optidx;
-        int opt = getopt_long(argc, argv, "n:p:sh", long_options, &optidx);
+        int opt = getopt_long(argc, argv, "n:p:s:d:k:h", long_options, &optidx);
 
         if (opt == -1) break;
         else if (opt == 'n') {
@@ -324,11 +345,21 @@ int main(int argc, char* argv[])
         }
         else if (opt == 's') {
             if (optarg == NULL) {
-                seed = (uint32_t) time(NULL);
+                seed = (uint32_t) time(NULL) * (uint32_t) getpid();
             }
             else {
                 seed = strtoul(optarg, NULL, 10);
             }
+        }
+        else if (opt == 'd') {
+            if (strlen(optarg) != 1) {
+                fprintf(stderr, "Error: delimiter must be exactly one character.\n");
+                return EXIT_FAILURE;
+            }
+            delim = optarg[0];
+        }
+        else if (opt == 'k') {
+            chunksize = (size_t) strtoul(optarg, NULL, 10);
         }
         else if (opt == 'h') {
             print_help(stdout);
