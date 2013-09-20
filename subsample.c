@@ -287,6 +287,24 @@ static const char* next_chunk_pass(const char* data, const char* end, char delim
 }
 
 
+// Find the start of the nth line. Echo to stdout if echo is true.
+static const char* skip_lines(const char* start, const char* end, size_t n, bool echo)
+{
+    const char* data = start;
+    const char* next;
+    while (data < end && n--) {
+        next = memchr(data, '\n', end - data);
+        data = next ? next + 1 : end;
+    }
+
+    if (echo && data > start) {
+        fwrite(start, 1, data - start, stdout);
+    }
+
+    return data;
+}
+
+
 // Count chunks in an array and keep track of the minimum step between delimiters.
 static uint64_t count_chunks(const char* data, const char* end, char delim,
                              size_t chunksize, size_t* minstep)
@@ -318,12 +336,14 @@ int main(int argc, char* argv[])
     uint32_t n = 1; // return a single random entry by default.
     char delim = '\n';
     size_t chunksize = 1;
+    size_t header_lines = 0;
     double p = NAN;
 
     static struct option long_options[] = {
         {"seed",      optional_argument, NULL, 's'},
         {"delimiter", required_argument, NULL, 'd'},
         {"chunksize", required_argument, NULL, 'k'},
+        {"header",    required_argument, NULL, 'h'},
         {"help",      no_argument,       NULL, 'h'},
         {0, 0, 0, 0}
     };
@@ -360,6 +380,9 @@ int main(int argc, char* argv[])
         }
         else if (opt == 'k') {
             chunksize = (size_t) strtoul(optarg, NULL, 10);
+        }
+        else if (opt == 'h') {
+            header_lines = (size_t) strtoul(optarg, NULL, 10);
         }
         else if (opt == 'h') {
             print_help(stdout);
@@ -403,8 +426,11 @@ int main(int argc, char* argv[])
     // count total chunks
     size_t minstep = 0;
     uint64_t m = 0;
+    const char *start, *end;
     for (size_t i = 0; i < numfiles; ++i) {
-        m += count_chunks(data[i], data[i] + filesizes[i], delim, chunksize, &minstep);
+        end = data[i] + filesizes[i];
+        start = i == 0 ? skip_lines(data[i], end, header_lines, false) : data[i];
+        m += count_chunks(start, end, delim, chunksize, &minstep);
     }
 
     if (!isnan(p)) n = (uint64_t) (p * (double) m);
@@ -423,12 +449,13 @@ int main(int argc, char* argv[])
     bitset_init(&bitset, m);
     random_bits(&rng, &bitset, 0, m - 1, n);
 
-    const char *chunk, *next, *end;
+    const char *chunk, *next;
     size_t chunknum = 0;
     size_t hits = 0;
     for (size_t i = 0; i < numfiles && hits < n; ++i) {
-        chunk = data[i];
         end = data[i] + filesizes[i];
+        start = i == 0 ? skip_lines(data[i], end, header_lines, true) : data[i];
+        chunk = start;
         while (chunk) {
             next = next_chunk(chunk, end, delim, chunksize, minstep);
             if (bitset_get(&bitset, chunknum)) {
