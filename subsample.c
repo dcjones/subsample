@@ -230,10 +230,10 @@ static bool bitset_get(bitset_t* s, size_t i)
 // performance shouldn't be an issue.
 
 // Resort to the fisher-yates method when the chunk size is this small or less.
-static const uint64_t brute_chunk_size = 1024;
+#define BRUTE_CHUNK_SIZE 1024
 
 // Work space for the fisher yates method.
-static uint32_t ks[brute_chunk_size];
+static uint32_t ks[BRUTE_CHUNK_SIZE];
 
 // Set n random bits in the interval [a, b] in the given bitset.
 static void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_t n)
@@ -241,7 +241,7 @@ static void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_
     assert(a <= b);
     uint64_t m = b - a + 1;
     assert(n <= m);
-    if (m <= brute_chunk_size) {
+    if (m <= BRUTE_CHUNK_SIZE) {
         for (uint32_t i = 0; i < m; ++i) ks[i] = i;
         shuffle(rng, ks, m);
         for (uint32_t i = 0; i < n; ++i) bitset_set(s, a + ks[i]);
@@ -255,24 +255,34 @@ static void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_
 }
 
 
-static const char* next_chunk(const char* data, const char* end, char delim, size_t chunksize)
+static const char* next_chunk(const char* data, const char* end, char delim,
+                              size_t chunksize, size_t minstep)
 {
     const char* c = data;
     while (chunksize--) {
         c = memchr(c, delim, end - c);
-        if (c == NULL || c + 1 >= end) return NULL;
-        ++c;
+        if (c == NULL || c + minstep >= end) return NULL;
+        c += minstep;
     }
     return c;
 }
 
 
-static uint64_t count_chunks(const char* data, const char* end, char delim, size_t chunksize)
+static uint64_t count_chunks(const char* data, const char* end, char delim,
+                             size_t chunksize, size_t* minstep)
 {
-    uint64_t count = 0;
-    while ((data = next_chunk(data, end, delim, chunksize))) {
+    *minstep = end - data;
+    if (data == end) return 0;
+
+    uint64_t count = 1;
+    const char* next;
+    while ((next = next_chunk(data, end, delim, chunksize, 1))) {
+        if ((size_t) (next - data) < *minstep) *minstep = next - data;
+        data = next;
         ++count;
     }
+
+    if ((size_t) (end - data) < *minstep) *minstep = end - data;
     return count;
 }
 
@@ -299,7 +309,7 @@ int main(int argc, char* argv[])
 
     while (true) {
         int optidx;
-        int opt = getopt_long(argc, argv, "n:p:s:h", long_options, &optidx);
+        int opt = getopt_long(argc, argv, "n:p:sh", long_options, &optidx);
 
         if (opt == -1) break;
         else if (opt == 'n') {
@@ -350,7 +360,7 @@ int main(int argc, char* argv[])
 
         fstat(fd, &fs);
         filesizes[i] = (uint64_t) fs.st_size;
-        data[i] = mmap(NULL, filesizes[i], PROT_READ, MAP_SHARED | MAP_NOCACHE, fd, 0);
+        data[i] = mmap(NULL, filesizes[i], PROT_READ, MAP_SHARED, fd, 0);
         if (data[i] == MAP_FAILED) {
             fprintf(stderr, "Error: unable to mmap %lu byte file %s. (%s)\n",
                     (unsigned long) filesizes[i], filenames[i], strerror(errno));
@@ -360,9 +370,10 @@ int main(int argc, char* argv[])
     }
 
     // count total chunks
+    size_t minstep = 0;
     uint64_t m = 0;
     for (size_t i = 0; i < numfiles; ++i) {
-        m += count_chunks(data[i], data[i] + filesizes[i], delim, chunksize);
+        m += count_chunks(data[i], data[i] + filesizes[i], delim, chunksize, &minstep);
     }
 
     if (!isnan(p)) n = (uint64_t) (p * (double) m);
@@ -388,7 +399,7 @@ int main(int argc, char* argv[])
         chunk = data[i];
         end = data[i] + filesizes[i];
         while (chunk) {
-            next = next_chunk(chunk, end, delim, chunksize);
+            next = next_chunk(chunk, end, delim, chunksize, minstep);
             if (bitset_get(&bitset, chunknum)) {
                 fwrite(chunk, 1, (next != NULL ? next : end) - chunk, stdout);
                 if (++hits == n) break;
