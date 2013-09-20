@@ -24,6 +24,8 @@
 
 
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <math.h>
 #include <stdbool.h>
@@ -31,25 +33,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 #include <time.h>
+#include <unistd.h>
 
 
 // Allocate safely
 
-void* malloc_or_die(size_t n)
+static void* malloc_or_die(size_t n)
 {
     void* p = malloc(n);
-    if (p == NULL) {
-        fprintf(stderr, "Can not allocate %zu bytes.\n", n);
-        exit(EXIT_FAILURE);
-    }
-    return p;
-}
-
-
-void* realloc_or_die(void* p, size_t n)
-{
-    p = realloc(p, n);
     if (p == NULL) {
         fprintf(stderr, "Can not allocate %zu bytes.\n", n);
         exit(EXIT_FAILURE);
@@ -69,7 +63,7 @@ typedef struct rng_t
 } rng_t;
 
 
-void rng_init(rng_t* rng, uint32_t seed)
+static void rng_init(rng_t* rng, uint32_t seed)
 {
     const uint32_t phi = 0x9e3779b9;
     rng->c = 362436;
@@ -85,7 +79,7 @@ void rng_init(rng_t* rng, uint32_t seed)
 }
 
 
-uint32_t rng_get(rng_t* rng)
+static uint32_t rng_get(rng_t* rng)
 {
     uint64_t t, a = UINT64_C(18782);
     uint32_t x, r = 0xfffffffe;
@@ -103,7 +97,7 @@ uint32_t rng_get(rng_t* rng)
 
 
 // Random integer in [0, k-1]
-uint32_t rng_uniform_int(rng_t* rng, uint32_t k)
+static uint32_t rng_uniform_int(rng_t* rng, uint32_t k)
 {
     uint32_t scale = UINT32_C(0xffffffff) / k;
     uint32_t r;
@@ -115,7 +109,7 @@ uint32_t rng_uniform_int(rng_t* rng, uint32_t k)
 
 
 // Random double in [0, 1]
-double rng_uniform(rng_t* rng)
+static double rng_uniform(rng_t* rng)
 {
     return (double) rng_get(rng) / (double) UINT32_MAX;
 }
@@ -124,7 +118,7 @@ double rng_uniform(rng_t* rng)
 // Random numbers from a hypergeometric distribution.
 // n1 + n2 is the toal population, n1 the "tagged" population, and t the number
 // of samples drawn without replacement.
-uint32_t rng_hypergeometric(rng_t* rng, uint32_t n1, uint32_t n2, uint32_t t)
+static uint32_t rng_hypergeometric(rng_t* rng, uint32_t n1, uint32_t n2, uint32_t t)
 {
     const uint32_t n = n1 + n2;
 
@@ -162,7 +156,7 @@ uint32_t rng_hypergeometric(rng_t* rng, uint32_t n1, uint32_t n2, uint32_t t)
 
 
 // Fisher-Yates shuffle
-void shuffle(rng_t* rng, uint32_t* ks, uint32_t n)
+static void shuffle(rng_t* rng, uint32_t* ks, uint32_t n)
 {
     uint32_t i, j, k;
     for (i = n - 1; i > 0; --i) {
@@ -187,7 +181,7 @@ typedef struct bitset_t
 } bitset_t;
 
 
-void bitset_init(bitset_t* s, size_t n)
+static void bitset_init(bitset_t* s, size_t n)
 {
     s->n = n;
     s->size = (n + 64 - 1) / 64;
@@ -196,7 +190,7 @@ void bitset_init(bitset_t* s, size_t n)
 }
 
 
-void bitset_free(bitset_t* s)
+static void bitset_free(bitset_t* s)
 {
     if (s) {
         free(s->xs);
@@ -204,13 +198,13 @@ void bitset_free(bitset_t* s)
 }
 
 
-void bitset_set(bitset_t* s, size_t i)
+static void bitset_set(bitset_t* s, size_t i)
 {
     s->xs[i / 64] |=  UINT64_C(1) << (i % 64);
 }
 
 
-bool bitset_get(bitset_t* s, size_t i)
+static bool bitset_get(bitset_t* s, size_t i)
 {
     return (s->xs[i / 64] >> (i % 64)) & UINT64_C(0x1);
 }
@@ -236,13 +230,13 @@ bool bitset_get(bitset_t* s, size_t i)
 // performance shouldn't be an issue.
 
 // Resort to the fisher-yates method when the chunk size is this small or less.
-const uint64_t brute_chunk_size = 1024;
+static const uint64_t brute_chunk_size = 1024;
 
 // Work space for the fisher yates method.
-uint32_t ks[brute_chunk_size];
+static uint32_t ks[brute_chunk_size];
 
 // Set n random bits in the interval [a, b] in the given bitset.
-void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_t n)
+static void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_t n)
 {
     assert(a <= b);
     uint64_t m = b - a + 1;
@@ -261,27 +255,29 @@ void random_bits(rng_t* rng, bitset_t* s, uint64_t a, uint64_t b, uint64_t n)
 }
 
 
-// Count the number of lines in a file.
-uint64_t count_lines(FILE* file)
+static const char* next_chunk(const char* data, const char* end, char delim, size_t chunksize)
 {
-    char buf[1024];
-    size_t linecount = 0;
-    size_t n;
-    bool nonempty = false; // is the last line non-empty
-    while ((n = fread(buf, 1, sizeof(buf), file))) {
-        nonempty = true;
-        char* c = memchr(buf, '\n', n);
-        while (c != NULL) {
-            ++linecount;
-            c = memchr(c + 1, '\n', n - (c - buf) - 1);
-            nonempty = c && c + 1 < buf + n;
-        }
+    const char* c = data;
+    while (chunksize--) {
+        c = memchr(c, delim, end - c);
+        if (c == NULL || c + 1 >= end) return NULL;
+        ++c;
     }
-    return nonempty ? linecount + 1 : linecount;
+    return c;
 }
 
 
-void print_help(FILE* out)
+static uint64_t count_chunks(const char* data, const char* end, char delim, size_t chunksize)
+{
+    uint64_t count = 0;
+    while ((data = next_chunk(data, end, delim, chunksize))) {
+        ++count;
+    }
+    return count;
+}
+
+
+static void print_help(FILE* out)
 {
     fprintf(out, "Usage: subsample [options] in_file [in_file2...] > out_file\n");
 }
@@ -291,6 +287,8 @@ int main(int argc, char* argv[])
 {
     uint32_t seed = UINT32_C(801239084);
     uint32_t n = 1; // return a single random entry by default.
+    char delim = '\n';
+    size_t chunksize = 1;
     double p = NAN;
 
     static struct option long_options[] = {
@@ -336,27 +334,35 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    // open all files
+    // mmap all files
     char** filenames = &argv[optind];
     size_t numfiles = argc - optind;
-    FILE** files = malloc_or_die(numfiles * sizeof(FILE*));
+
+    const char** data = malloc_or_die(numfiles * sizeof(char*));
+    uint64_t* filesizes = malloc_or_die(numfiles * sizeof(uint64_t));
+    struct stat fs;
     for (size_t i = 0; i < numfiles; ++i) {
-        files[i] = fopen(filenames[i], "r");
-        if (!files[i]) {
-            fprintf(stderr, "Error: cannot open %s for reading.\n",
-                    filenames[i]);
+        int fd = open(filenames[i], O_RDONLY);
+        if (fd < 0) {
+            fprintf(stderr, "Error: cannot open %s for reading.\n", filenames[i]);
             return EXIT_FAILURE;
         }
+
+        fstat(fd, &fs);
+        filesizes[i] = (uint64_t) fs.st_size;
+        data[i] = mmap(NULL, filesizes[i], PROT_READ, MAP_SHARED | MAP_NOCACHE, fd, 0);
+        if (data[i] == MAP_FAILED) {
+            fprintf(stderr, "Error: unable to mmap %lu byte file %s. (%s)\n",
+                    (unsigned long) filesizes[i], filenames[i], strerror(errno));
+            return EXIT_FAILURE;
+        }
+        close(fd);
     }
 
-    // count total lines
+    // count total chunks
     uint64_t m = 0;
     for (size_t i = 0; i < numfiles; ++i) {
-        m += count_lines(files[i]);
-        if (fseek(files[i], 0L, SEEK_SET) != 0) {
-            fprintf(stderr, "Error: %s is unseekable.\n", filenames[i]);
-            return EXIT_FAILURE;
-        }
+        m += count_chunks(data[i], data[i] + filesizes[i], delim, chunksize);
     }
 
     if (!isnan(p)) n = (uint64_t) (p * (double) m);
@@ -375,31 +381,30 @@ int main(int argc, char* argv[])
     bitset_init(&bitset, m);
     random_bits(&rng, &bitset, 0, m - 1, n);
 
-    char buf[1024];
-    size_t line = 0;
-    bool sampled = bitset_get(&bitset, 0);
-    for (size_t i = 0; i < numfiles; ++i) {
-        size_t readlen;
-        while ((readlen = fread(buf, 1, sizeof(buf), files[i]))) {
-            char* c = buf;
-            while (c != NULL && c < buf + readlen) {
-                char* cnext = memchr(c, '\n', readlen - (c - buf));
-                if (cnext == NULL) {
-                    if (sampled) fwrite(c, 1, readlen - (c - buf), stdout);
-                    c = NULL;
-                }
-                else {
-                    if (sampled) fwrite(c, 1, cnext - c + 1, stdout);
-                    sampled = bitset_get(&bitset, ++line);
-                    c = cnext + 1;
-                }
+    const char *chunk, *next, *end;
+    size_t chunknum = 0;
+    size_t hits = 0;
+    for (size_t i = 0; i < numfiles && hits < n; ++i) {
+        chunk = data[i];
+        end = data[i] + filesizes[i];
+        while (chunk) {
+            next = next_chunk(chunk, end, delim, chunksize);
+            if (bitset_get(&bitset, chunknum)) {
+                fwrite(chunk, 1, (next != NULL ? next : end) - chunk, stdout);
+                if (++hits == n) break;
             }
+            chunk = next;
+            ++chunknum;
         }
     }
 
     bitset_free(&bitset);
+
     for (size_t i = 0; i < numfiles; ++i) {
-        fclose(files[i]);
+        munmap((void*) data[i], filesizes[i]);
     }
+
+    free(filesizes);
+    free(data);
 }
 
