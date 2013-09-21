@@ -343,14 +343,14 @@ int main(int argc, char* argv[])
         {"seed",      optional_argument, NULL, 's'},
         {"delimiter", required_argument, NULL, 'd'},
         {"chunksize", required_argument, NULL, 'k'},
-        {"header",    required_argument, NULL, 'h'},
+        {"header",    required_argument, NULL, 'H'},
         {"help",      no_argument,       NULL, 'h'},
         {0, 0, 0, 0}
     };
 
     while (true) {
         int optidx;
-        int opt = getopt_long(argc, argv, "n:p:s:d:k:h", long_options, &optidx);
+        int opt = getopt_long(argc, argv, "n:p:s:d:k:H:h", long_options, &optidx);
 
         if (opt == -1) break;
         else if (opt == 'n') {
@@ -381,7 +381,7 @@ int main(int argc, char* argv[])
         else if (opt == 'k') {
             chunksize = (size_t) strtoul(optarg, NULL, 10);
         }
-        else if (opt == 'h') {
+        else if (opt == 'H') {
             header_lines = (size_t) strtoul(optarg, NULL, 10);
         }
         else if (opt == 'h') {

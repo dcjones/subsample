@@ -36,7 +36,7 @@ used, every four lines is considered an entry. (default: 1)
 
 `-d C, --delimiter=C`: Lines are separated by this character. (default: \n)
 
-`-h H, --header=H`: Echo the first H lines in the file being sampled from, and
+`-H H, --header=H`: Echo the first H lines in the file being sampled from, and
 exclude them from sampling.
 
 `--help`: Print this message.
