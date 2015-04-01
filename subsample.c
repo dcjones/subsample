@@ -326,7 +326,29 @@ static uint64_t count_chunks(const char* data, const char* end, char delim,
 
 static void print_help(FILE* out)
 {
-    fprintf(out, "Usage: subsample [options] in_file [in_file2...] > out_file\n");
+    fprintf(out,
+        "Usage: subsample [options] in_file [in_file2...] > out_file\n");
+    fprintf(out,
+        "   -n N    Number of chunks to sample. (default: 1)\n");
+    fprintf(out,
+        "   -s SEED, --seed=SEED\n"
+        "           Seed the random number generator. By default a fixed\n"
+        "           seed is used. Specifying --seed with no argument will\n"
+        "           choose a somewhat unique seed from the current time\n"
+        "           and the process id.\n");
+    fprintf(out,
+        "   -k K, --chunksize=K\n"
+        "           Sample over groups of this many lines. E.g. if -k 4 is\n"
+        "           used, 4 lines are considered 1 entry. (default: 1)\n");
+    fprintf(out,
+        "   -d C, --delimiter=C\n"
+        "           Lines are separated by this character. (default: \\n)\n");
+    fprintf(out,
+        "   -H H, --header=H\n"
+        "           Echo the first H lines in the file being sampled from,\n"
+        "           and exclude them from sampling.\n");
+    fprintf(out,
+        "   --help: Print this message.\n");
 }
 
 
